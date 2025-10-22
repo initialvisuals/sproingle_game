@@ -1,10 +1,3 @@
-
-/**
- * @file App.tsx
- * @description This is the main component for the Sproingle rogue-lite game.
- * It manages all game state, the main game loop, player actions, and rendering of all UI components and modals.
- * The game is turn-based, with player actions triggering subsequent enemy turns and state updates.
- */
 import React from 'react';
 import { GameGrid } from './components/GameGrid';
 import { GameUI } from './components/GameUI';
@@ -18,21 +11,27 @@ import { Dpad } from './components/Dpad';
 import { ActionPanel } from './components/ActionPanel';
 import { VolumeControls } from './components/VolumeControls';
 import { ClassSelectionModal } from './components/ClassSelectionModal';
+import { CorruptionMeter } from './components/CorruptionMeter';
 import { generateDungeon } from './services/dungeonService';
 import { soundService } from './services/soundService';
 import { getEnemyDescription } from './services/geminiService';
-import type { GameState, Enemy, Position, Item, ArrowProjectile, Direction, Bomb, Player, GameScreen, PlayerClass, DamageNumber } from './types';
-import { GAME_STATE, VIEWPORT_WIDTH, VIEWPORT_HEIGHT, ItemType, HazardType, THEMES, ENEMY_STYLES, XP_BASE, XP_GROWTH_FACTOR, SHOP_ITEMS, WORLD_SCREENS_W, WORLD_SCREENS_H, BOMB_FUSE_STEPS, BOMB_RANGE, PLAYER_CLASSES, POISON_TICK_STEPS, POISON_DAMAGE, EnemyType } from './constants';
+import type { GameState, Enemy, Position, Item, ArrowProjectile, Direction, Bomb, Player, GameScreen, PlayerClass, DamageNumber, AugmentId } from '../../types';
+import { GAME_STATE, ItemType, HazardType, XP_BASE, XP_GROWTH_FACTOR, BOMB_FUSE_STEPS, BOMB_RANGE, POISON_TICK_STEPS, POISON_DAMAGE, EnemyType, TileType } from './constants';
+import { PLAYER_CLASSES } from './data/player_classes';
+import { ENEMY_DATA } from './data/enemies';
+import { SHOP_ITEMS } from './data/items';
+import { SYSTEMS } from './data/systems';
+import { AUGMENTS } from './data/augments';
+import { ALTAR_EFFECTS } from './data/altars';
+
 
 const App: React.FC = () => {
-  // --- CORE GAME STATE ---
   const [gameState, setGameState] = React.useState<GameState>(GAME_STATE);
   const [gameScreen, setGameScreen] = React.useState<GameScreen>('title');
   const [isGameOver, setIsGameOver] = React.useState(false);
   const [isPaused, setIsPaused] = React.useState(false);
-  const animatingRef = React.useRef(false); // Ref to prevent player input during animations
+  const animatingRef = React.useRef(false);
 
-  // --- UI/MODAL STATE ---
   const [message, setMessage] = React.useState('Welcome! Use arrow keys to move.');
   const [isInspecting, setIsInspecting] = React.useState(false);
   const [inspectedEnemy, setInspectedEnemy] = React.useState<{ enemy: Enemy; description: string } | null>(null);
@@ -41,92 +40,70 @@ const App: React.FC = () => {
   const [isSettingsOpen, setIsSettingsOpen] = React.useState(false);
   const [isTransitioning, setIsTransitioning] = React.useState(false);
   
-  // --- VISUAL/AUDIO FEEDBACK STATE ---
   const [arrowProjectile, setArrowProjectile] = React.useState<ArrowProjectile | null>(null);
   const [isPlayerHit, setIsPlayerHit] = React.useState(false);
   const [isPlayerPoisonedFlashing, setIsPlayerPoisonedFlashing] = React.useState(false);
   const [damageNumbers, setDamageNumbers] = React.useState<DamageNumber[]>([]);
-  const [musicVolume, setMusicVolume] = React.useState(() => {
-    try {
-      const saved = localStorage.getItem('sproingle_music_volume');
-      return saved ? JSON.parse(saved) : 0.1;
-    } catch { return 0.1; }
-  });
-  const [sfxVolume, setSfxVolume] = React.useState(() => {
-    try {
-      const saved = localStorage.getItem('sproingle_sfx_volume');
-      return saved ? JSON.parse(saved) : 0.25;
-    } catch { return 0.25; }
-  });
+  const [musicVolume, setMusicVolume] = React.useState(() => { try { const saved = localStorage.getItem('sproingle_music_volume'); return saved ? JSON.parse(saved) : 0.1; } catch { return 0.1; } });
+  const [sfxVolume, setSfxVolume] = React.useState(() => { try { const saved = localStorage.getItem('sproingle_sfx_volume'); return saved ? JSON.parse(saved) : 0.25; } catch { return 0.25; } });
   
-  // --- AUDIO MANAGEMENT ---
-  React.useEffect(() => {
-    soundService.setMusicVolume(musicVolume);
-    localStorage.setItem('sproingle_music_volume', JSON.stringify(musicVolume));
-  }, [musicVolume]);
-  React.useEffect(() => {
-    soundService.setSfxVolume(sfxVolume);
-    localStorage.setItem('sproingle_sfx_volume', JSON.stringify(sfxVolume));
-  }, [sfxVolume]);
+  React.useEffect(() => { soundService.setMusicVolume(musicVolume); localStorage.setItem('sproingle_music_volume', JSON.stringify(musicVolume)); }, [musicVolume]);
+  React.useEffect(() => { soundService.setSfxVolume(sfxVolume); localStorage.setItem('sproingle_sfx_volume', JSON.stringify(sfxVolume)); }, [sfxVolume]);
 
-  const handleSfxVolumeChange = (volume: number) => {
-    setSfxVolume(volume);
-    soundService.playSelect();
-  };
+  const handleSfxVolumeChange = (volume: number) => { setSfxVolume(volume); soundService.play('select'); };
   
-  // --- THEME MANAGEMENT ---
   React.useEffect(() => {
     const root = document.documentElement;
     const theme = gameState.theme;
-    root.style.setProperty('--color-bg', theme.bg);
-    root.style.setProperty('--color-text', theme.text);
-    root.style.setProperty('--color-wall', theme.wall);
-    root.style.setProperty('--color-floor', theme.floor);
-    root.style.setProperty('--color-accent1', theme.accent1);
-    root.style.setProperty('--color-accent2', theme.accent2);
-    root.style.setProperty('--color-doodad', theme.doodad);
+    if(theme) {
+       Object.keys(theme).forEach(key => {
+         if (key !== 'name') root.style.setProperty(`--color-${key}`, theme[key])
+       });
+    }
   }, [gameState.theme]);
+  
+  React.useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (isGameOver || isLevelingUp || isShopping || isSettingsOpen) return;
+      if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) {
+        e.preventDefault();
+        handleMove(e.key as Direction);
+      } else if (e.key.toLowerCase() === 'p') usePotion();
+      else if (e.key.toLowerCase() === 'b') placeBomb();
+      else if (e.key.toLowerCase() === 'a') fireArrow();
+      else if (e.key.toLowerCase() === 'c') useAntidote();
+      else if (e.key.toLowerCase() === 'escape') setIsPaused(p => !p);
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [gameState, isGameOver, isLevelingUp, isShopping, isSettingsOpen, isPaused]);
+
 
   const createDamageNumber = (x: number, y: number, amount: number, type: 'player' | 'enemy') => {
     const id = Date.now() + Math.random();
     setDamageNumbers(prev => [...prev, { id, x, y, amount, type }]);
-    setTimeout(() => {
-      setDamageNumbers(prev => prev.filter(dn => dn.id !== id));
-    }, 1000);
+    setTimeout(() => { setDamageNumbers(prev => prev.filter(dn => dn.id !== id)); }, 1000);
   };
 
-  const triggerPlayerHitEffect = React.useCallback(() => {
-    setIsPlayerHit(true);
-    setTimeout(() => setIsPlayerHit(false), 200);
-  }, []);
-  
-  const triggerPoisonFlashEffect = React.useCallback(() => {
-    setIsPlayerPoisonedFlashing(true);
-    setTimeout(() => setIsPlayerPoisonedFlashing(false), 300);
-  }, []);
+  const triggerPlayerHitEffect = React.useCallback(() => { setIsPlayerHit(true); setTimeout(() => setIsPlayerHit(false), 200); }, []);
+  const triggerPoisonFlashEffect = React.useCallback(() => { setIsPlayerPoisonedFlashing(true); setTimeout(() => setIsPlayerPoisonedFlashing(false), 300); }, []);
 
   const newGame = (level: number, playerOverride?: Partial<Player>) => {
-    const theme = THEMES[Math.floor(Math.random() * THEMES.length)];
+    const theme = SYSTEMS.THEMES[Math.floor(Math.random() * SYSTEMS.THEMES.length)];
     const dungeon = generateDungeon(level);
-    
     const playerStats = { ...dungeon.player, ...(playerOverride || {}) };
-
     setGameState({ ...dungeon, theme, level, player: playerStats as Player });
     setMessage(`Level ${level}. Find the stairs!`);
     setIsGameOver(false);
     setIsPaused(false);
-    if (level === 1 && !playerOverride) soundService.playStart();
+    if (level === 1 && !playerOverride) soundService.play('level_start');
   };
 
-  const startGame = () => {
-    soundService.resumeContext();
-    soundService.playBackgroundMusic();
-    setGameScreen('class_selection');
-  };
+  const startGame = () => { soundService.init(); soundService.playBackgroundMusic(); setGameScreen('class_selection'); };
   
   const handleClassSelect = (playerClass: PlayerClass) => {
     const classData = PLAYER_CLASSES[playerClass];
-    const playerStart: Partial<Player> = { ...classData.stats, playerClass, corruption: 0, activeAugments: [] };
+    const playerStart: Partial<Player> = { ...classData.stats, playerClass, corruption: 0, activeAugments: [], stepsTaken: 0 };
     newGame(1, playerStart);
     setGameScreen('game');
   };
@@ -135,33 +112,24 @@ const App: React.FC = () => {
      const playerClass = gameState.player.playerClass;
      const classDefaults = PLAYER_CLASSES[playerClass].stats;
      const retainedPlayer: Partial<Player> = {
-       playerClass: playerClass,
-       level: gameState.player.level,
-       maxHp: gameState.player.maxHp,
-       attack: gameState.player.attack,
-       gold: Math.floor(gameState.player.gold / 2),
-       xp: 0,
-       ...classDefaults, // Carries over correct starting items and caps
-       corruption: gameState.player.corruption, // Carry over corruption
-       activeAugments: gameState.player.activeAugments, // Carry over augments
+       playerClass: playerClass, level: gameState.player.level, maxHp: gameState.player.maxHp,
+       attack: gameState.player.attack, gold: Math.floor(gameState.player.gold / 2), xp: 0,
+       ...classDefaults, corruption: gameState.player.corruption, activeAugments: gameState.player.activeAugments,
      };
      newGame(1, retainedPlayer);
      setMessage('You awake at the entrance, stronger but lighter of pocket...');
   };
 
-  const quitGame = () => {
-    setIsPaused(false);
-    setGameScreen('title');
-  };
+  const quitGame = () => { setIsPaused(false); soundService.stopBackgroundMusic(); setGameScreen('title'); };
 
   const handleNextLevel = () => {
-    soundService.playNextLevel();
+    soundService.play('level_up');
     setIsTransitioning(true);
     setTimeout(() => {
         const newDungeonLevel = gameState.level + 1;
         const retainedPlayer: Partial<Player> = { ...gameState.player, hp: gameState.player.maxHp };
         newGame(newDungeonLevel, retainedPlayer);
-        setMessage(`You feel stronger! Welcome to level ${newDungeonLevel}`);
+        setMessage(`Welcome to level ${newDungeonLevel}`);
         setIsTransitioning(false);
     }, 400);
   };
@@ -170,7 +138,7 @@ const App: React.FC = () => {
     if (isInspecting) return;
     setIsInspecting(true);
     setInspectedEnemy({ enemy, description: 'Thinking...' });
-    soundService.playSelect();
+    soundService.play('inspect');
     try {
       const description = await getEnemyDescription(enemy.type);
       setInspectedEnemy({ enemy, description });
@@ -181,36 +149,35 @@ const App: React.FC = () => {
   };
   
   const handleEnemyDefeated = (enemy: Enemy) => {
-    const xpGained = Math.floor(ENEMY_STYLES[enemy.type].baseXp * (1 + gameState.level / 10));
-    setMessage(`You defeated the ${enemy.type}! +${xpGained} XP`);
-    soundService.playEnemyDeath();
+    const xpGained = Math.floor(ENEMY_DATA[enemy.type].baseXp * (1 + gameState.level / 10));
+    setMessage(`Defeated ${enemy.type}! +${xpGained} XP`);
+    soundService.play('enemy_die');
     
-    // TODO: Augment Effect Application
-    // Example: check for an augment that grants gold on kill
-    // if (gameState.player.activeAugments.includes('GOLD_RUSH')) {
-    //   setGameState(prev => ({...prev, player: {...prev.player, gold: prev.player.gold + 5}}));
-    // }
-
     setGameState(prev => {
-      const newPlayerState = { ...prev.player };
-      newPlayerState.xp += xpGained;
+      let newEnemies = prev.enemies;
+      // Handle slime splitting
+      if(ENEMY_DATA[enemy.type].onDeath === 'split') {
+          setMessage("The slime splits in two!");
+          soundService.play('slime_split');
+          const babySlime = { ...ENEMY_DATA.SLIME_MINI, id: Date.now(), x: enemy.x, y: enemy.y };
+          const babySlime2 = { ...ENEMY_DATA.SLIME_MINI, id: Date.now()+1, x: enemy.x+1, y: enemy.y }; // a bit naive
+          newEnemies.push(babySlime, babySlime2);
+      }
+
+      const newPlayerState = { ...prev.player, xp: prev.player.xp + xpGained };
       if (newPlayerState.xp >= newPlayerState.xpToNextLevel) {
         setIsLevelingUp(true);
-        soundService.playLevelUp();
+        soundService.play('level_up');
       }
-      return { ...prev, player: newPlayerState };
+      return { ...prev, player: newPlayerState, enemies: newEnemies };
     });
   };
   
   const handleLevelUpChoice = (choice: 'hp' | 'attack') => {
     setGameState(prev => {
         const newPlayer = {...prev.player};
-        if (choice === 'hp') {
-            newPlayer.maxHp += 20;
-            newPlayer.hp = newPlayer.maxHp;
-        } else {
-            newPlayer.attack += 5;
-        }
+        if (choice === 'hp') { newPlayer.maxHp += 20; newPlayer.hp = newPlayer.maxHp; } 
+        else { newPlayer.attack += 5; }
         newPlayer.xp -= newPlayer.xpToNextLevel;
         newPlayer.level += 1;
         newPlayer.xpToNextLevel = Math.floor(XP_BASE * Math.pow(newPlayer.level, XP_GROWTH_FACTOR));
@@ -220,448 +187,376 @@ const App: React.FC = () => {
   };
   
   const handleBuyItem = (item: typeof SHOP_ITEMS[number]) => {
-    if (gameState.player.gold < item.cost) {
-        setMessage("You don't have enough gold!");
-        return;
-    }
-    soundService.playShopBuy();
+    if (gameState.player.gold < item.cost) { setMessage("Not enough gold!"); soundService.play('error'); return; }
+    soundService.play('buy_item');
     setGameState(prev => {
         const newPlayer = {...prev.player, gold: prev.player.gold - item.cost};
         switch(item.type) {
-            case ItemType.POTION:
-                newPlayer.potions = Math.min(3, newPlayer.potions + 1);
-                setMessage("Bought a potion.");
-                break;
-            case ItemType.ARROWS:
-                newPlayer.arrows = Math.min(newPlayer.maxArrows, newPlayer.arrows + 3);
-                setMessage("Bought 3 arrows.");
-                break;
-            case ItemType.BOMB:
-                newPlayer.bombs = Math.min(newPlayer.maxBombs, newPlayer.bombs + 1);
-                setMessage("Bought a bomb.");
-                break;
-            case ItemType.ANTIDOTE:
-                newPlayer.antidotes = Math.min(3, newPlayer.antidotes + 1);
-                setMessage("Bought an antidote.");
-                break;
+            case ItemType.POTION: newPlayer.potions = Math.min(3, newPlayer.potions + 1); setMessage("Bought a potion."); break;
+            case ItemType.ARROWS: newPlayer.arrows = Math.min(newPlayer.maxArrows, newPlayer.arrows + 3); setMessage("Bought 3 arrows."); break;
+            case ItemType.BOMB: newPlayer.bombs = Math.min(newPlayer.maxBombs, newPlayer.bombs + 1); setMessage("Bought a bomb."); break;
+            case ItemType.ANTIDOTE: newPlayer.antidotes = Math.min(3, newPlayer.antidotes + 1); setMessage("Bought an antidote."); break;
         }
         return {...prev, player: newPlayer};
     });
+  };
+  
+  const usePotion = () => {
+    if (gameState.player.activeAugments.includes('IRON_WILL')) { setMessage("Your iron will prevents you from drinking potions!"); soundService.play('error'); return; }
+    if (gameState.player.potions > 0 && gameState.player.hp < gameState.player.maxHp) {
+      soundService.play('use_potion');
+      setGameState(prev => {
+        const healAmount = Math.floor(prev.player.maxHp * 0.5);
+        const newHp = Math.min(prev.player.maxHp, prev.player.hp + healAmount);
+        return { ...prev, player: { ...prev.player, hp: newHp, potions: prev.player.potions - 1 } };
+      });
+      setMessage("You used a potion and feel refreshed.");
+    } else {
+      setMessage(gameState.player.potions === 0 ? "No potions!" : "Health is full.");
+    }
+  };
+
+  const useAntidote = () => {
+      if(gameState.player.antidotes > 0 && gameState.player.isPoisoned) {
+          soundService.play('use_potion');
+          setGameState(prev => ({ ...prev, player: { ...prev.player, isPoisoned: false, poisonStepCounter: 0, antidotes: prev.player.antidotes - 1 }}));
+          setMessage("You used an antidote and the poison subsided.");
+      } else {
+          setMessage(gameState.player.antidotes === 0 ? "No antidotes!" : "You are not poisoned.");
+      }
   }
 
-  const processEnemyTurn = () => {
-    setGameState(prev => {
-      const { player, enemies, map } = prev;
-      let newPlayerState = { ...player };
-      let messages: string[] = [];
-      let playerWasHit = false;
+  const placeBomb = () => {
+    if (gameState.player.bombs > 0) {
+      soundService.play('place_bomb');
+      setGameState(prev => ({
+        ...prev,
+        player: { ...prev.player, bombs: prev.player.bombs - 1 },
+        bombs: [...prev.bombs, { id: Date.now(), x: prev.player.x, y: prev.player.y, stepsRemaining: BOMB_FUSE_STEPS }]
+      }));
+      setMessage("You placed a bomb. Get clear!");
+    } else {
+      setMessage("No bombs!");
+    }
+  }
 
-      const updatedEnemies = enemies.map(enemy => {
-        if (enemy.hp <= 0) return enemy;
-        const playerScreen = { x: Math.floor(player.x / VIEWPORT_WIDTH), y: Math.floor(player.y / VIEWPORT_HEIGHT) };
-        const enemyScreen = { x: Math.floor(enemy.x / VIEWPORT_WIDTH), y: Math.floor(enemy.y / VIEWPORT_HEIGHT) };
-        if (playerScreen.x !== enemyScreen.x || playerScreen.y !== enemyScreen.y) return enemy;
-        let { x: newEx, y: newEy } = enemy;
-        const dx = player.x - newEx, dy = player.y - newEy;
+  const fireArrow = () => {
+    if (gameState.player.arrows > 0 && gameState.player.lastMoveDirection) {
+      soundService.play('arrow_shot');
+      setGameState(prev => ({ ...prev, player: { ...prev.player, arrows: prev.player.arrows - 1 } }));
+      setArrowProjectile({ x: gameState.player.x, y: gameState.player.y, direction: gameState.player.lastMoveDirection, visible: true });
+      animatingRef.current = true;
+    } else {
+      setMessage(gameState.player.arrows === 0 ? "No arrows!" : "Move first to aim.");
+    }
+  };
+  
+  const processAugmentEffects = (playerState: Player): Player => {
+    let newPlayer = {...playerState};
+    if(newPlayer.activeAugments.includes('CORRUPTED_BLOOD') && newPlayer.stepsTaken % 25 === 0 && newPlayer.stepsTaken > 0) {
+        newPlayer.maxHp = Math.max(1, newPlayer.maxHp - 1);
+        newPlayer.hp = Math.min(newPlayer.hp, newPlayer.maxHp);
+        setMessage("Your corrupted blood drains your vitality...");
+    }
+    return newPlayer;
+  }
 
-        if (Math.abs(dx) > Math.abs(dy)) newEx += Math.sign(dx);
-        else if (Math.abs(dy) > Math.abs(dx)) newEy += Math.sign(dy);
-        else if (dx !== 0) { if (Math.random() > 0.5) newEx += Math.sign(dx); else newEy += Math.sign(dy); }
+  const processEnemyTurn = (currentState: GameState): GameState => {
+    let newEnemies = [...currentState.enemies];
+    let newPlayer = { ...currentState.player };
+    let playerTookDamage = false;
 
-        if (newEx === player.x && newEy === player.y) {
-          // TODO: Corruption Effect Application
-          // Example: Increase enemy damage based on player's corruption level.
-          // const corruptionBonus = Math.floor(newPlayerState.corruption / 10);
-          const corruptionBonus = 0; // Placeholder
-          const enemyDamage = enemy.attack + corruptionBonus + Math.floor(Math.random() * 3);
+    newEnemies.forEach((enemy, index) => {
+        let dx = newPlayer.x - enemy.x;
+        let dy = newPlayer.y - enemy.y;
+        let newX = enemy.x;
+        let newY = enemy.y;
 
-          newPlayerState.hp -= enemyDamage;
-          createDamageNumber(player.x, player.y, enemyDamage, 'player');
-          messages.push(`The ${enemy.type} attacks for ${enemyDamage} damage!`);
-          playerWasHit = true;
+        if (Math.abs(dx) > Math.abs(dy)) newX += Math.sign(dx);
+        else newY += Math.sign(dy);
 
-          if (enemy.type === EnemyType.SPIDER && !newPlayerState.isPoisoned) {
-              newPlayerState.isPoisoned = true;
-              newPlayerState.poisonStepCounter = 0;
-              messages.push("You have been poisoned!");
-              soundService.playPoisoned();
-          }
-          return enemy;
-        } 
-        
-        const isWall = map[newEy]?.[newEx] === 1;
-        const isOccupied = enemies.some(e => e.id !== enemy.id && e.x === newEx && e.y === newEy && e.hp > 0);
-        if (!isWall && !isOccupied) return { ...enemy, x: newEx, y: newEy };
-        
-        return enemy;
-      });
-
-      if (messages.length > 0) setMessage(messages.join(' '));
-      if (playerWasHit) { triggerPlayerHitEffect(); soundService.playCrunch(); }
-      if (newPlayerState.hp <= 0 && player.hp > 0) { setIsGameOver(true); soundService.playPlayerDeath(); }
-
-      return { ...prev, enemies: updatedEnemies, player: newPlayerState };
+        if (newX === newPlayer.x && newY === newPlayer.y) {
+            const damage = Math.max(1, enemy.attack);
+            newPlayer.hp -= damage;
+            createDamageNumber(newPlayer.x, newPlayer.y, damage, 'player');
+            playerTookDamage = true;
+            if(ENEMY_DATA[enemy.type].canPoison && Math.random() < 0.3) {
+                newPlayer.isPoisoned = true;
+                setMessage("You have been poisoned!");
+            }
+        } else if (currentState.map[newY][newX] === TileType.FLOOR && !newEnemies.some(e => e.x === newX && e.y === newY)) {
+            newEnemies[index] = { ...enemy, x: newX, y: newY };
+        }
     });
-    setTimeout(() => animatingRef.current = false, 150);
+    
+    if (playerTookDamage) {
+        soundService.play('player_hit');
+        triggerPlayerHitEffect();
+        if (newPlayer.hp <= 0) {
+            setIsGameOver(true);
+            setMessage("You have been defeated!");
+            soundService.play('game_over');
+        }
+    }
+    return { ...currentState, player: newPlayer, enemies: newEnemies };
   };
 
-  const processTurn = (newPlayerPos: Position) => {
-    if (animatingRef.current) return;
-    animatingRef.current = true;
+  const processTurn = (newPlayerPos: Position): GameState => {
+      let newState: GameState = { ...gameState, player: { ...gameState.player, ...newPlayerPos, stepsTaken: gameState.player.stepsTaken + 1 } };
+      
+      newState.player = processAugmentEffects(newState.player);
 
-    setGameState(prev => {
-      let newPlayerState = { ...prev.player, ...newPlayerPos };
-      let newBombs = prev.bombs.map(b => ({ ...b, stepsRemaining: b.stepsRemaining - 1 }));
-      let newEnemies = [...prev.enemies];
-      let newPickedUpItems = new Set(prev.pickedUpItems);
-      let newActiveBlasts: Position[] = [];
-      let shouldEnemiesMove = true;
-      let shouldExit = false;
-
-      // Poison Tick
-      if (newPlayerState.isPoisoned) {
-          newPlayerState.poisonStepCounter++;
-          if (newPlayerState.poisonStepCounter >= POISON_TICK_STEPS) {
-              newPlayerState.poisonStepCounter = 0;
-              newPlayerState.hp -= POISON_DAMAGE;
-              createDamageNumber(newPlayerState.x, newPlayerState.y, POISON_DAMAGE, 'player');
-              setMessage("The poison burns...");
-              soundService.playPoisonTick();
-              triggerPoisonFlashEffect();
-          }
-      }
-
-      // Bomb Detonation
-      const explodingBombs = newBombs.filter(b => b.stepsRemaining <= 0);
-      newBombs = newBombs.filter(b => b.stepsRemaining > 0);
-      if (explodingBombs.length > 0) {
-          soundService.playExplosion();
-          explodingBombs.forEach(bomb => {
-              for (let i = 0; i < 4; i++) {
-                  for (let j = 1; j <= BOMB_RANGE; j++) {
-                      const dx = i === 0 ? j : i === 1 ? -j : 0;
-                      const dy = i === 2 ? j : i === 3 ? -j : 0;
-                      const tileX = bomb.x + dx, tileY = bomb.y + dy;
-                      if (prev.map[tileY]?.[tileX] === 1) break;
-                      if (!newActiveBlasts.some(p => p.x === tileX && p.y === tileY)) newActiveBlasts.push({x: tileX, y: tileY});
+      // Bomb Ticking
+      let newBombs = [];
+      let newBlasts: Position[] = [];
+      for (const bomb of newState.bombs) {
+          const newSteps = bomb.stepsRemaining - 1;
+          if (newSteps > 0) {
+              newBombs.push({ ...bomb, stepsRemaining: newSteps });
+          } else {
+              soundService.play('bomb_explode');
+              for (let y = bomb.y - BOMB_RANGE; y <= bomb.y + BOMB_RANGE; y++) {
+                  for (let x = bomb.x - BOMB_RANGE; x <= bomb.x + BOMB_RANGE; x++) {
+                      if (x >= 0 && x < newState.map[0].length && y >= 0 && y < newState.map.length) {
+                          const dist = Math.sqrt(Math.pow(x - bomb.x, 2) + Math.pow(y - bomb.y, 2));
+                          if (dist <= BOMB_RANGE) newBlasts.push({x, y});
+                      }
                   }
               }
-              if (!newActiveBlasts.some(p => p.x === bomb.x && p.y === bomb.y)) newActiveBlasts.push({x: bomb.x, y: bomb.y});
-          });
-          const bombDamage = 50 + newPlayerState.bombDamageBonus;
-          newEnemies = newEnemies.map(enemy => {
-              if (enemy.hp > 0 && newActiveBlasts.some(p => p.x === enemy.x && p.y === enemy.y)) {
-                  const newHp = enemy.hp - bombDamage;
-                  createDamageNumber(enemy.x, enemy.y, bombDamage, 'enemy');
-                  if (newHp <= 0) handleEnemyDefeated(enemy);
-                  return {...enemy, hp: newHp, isHit: true};
-              }
-              return enemy;
-          });
-          if (newActiveBlasts.some(p => p.x === newPlayerState.x && p.y === newPlayerState.y)) {
-              newPlayerState.hp -= bombDamage;
-              createDamageNumber(newPlayerState.x, newPlayerState.y, bombDamage, 'player');
-              triggerPlayerHitEffect();
           }
       }
       
-      soundService.playSproing();
+      newState.bombs = newBombs;
+      
+      // Apply blast damage
+      if (newBlasts.length > 0) {
+          const bombDamage = 20 + newState.player.bombDamageBonus;
+          newState.enemies = newState.enemies.filter(enemy => {
+              if (newBlasts.some(b => b.x === enemy.x && b.y === enemy.y)) {
+                  createDamageNumber(enemy.x, enemy.y, bombDamage, 'enemy');
+                  handleEnemyDefeated(enemy);
+                  return false;
+              }
+              return true;
+          });
+          if (newBlasts.some(b => b.x === newState.player.x && b.y === newState.player.y)) {
+              newState.player.hp -= bombDamage;
+              createDamageNumber(newState.player.x, newState.player.y, bombDamage, 'player');
+              triggerPlayerHitEffect();
+              if (newState.player.hp <= 0) {
+                  setIsGameOver(true);
+                  setMessage("You blew yourself up!");
+              }
+          }
+      }
+      newState.activeBlasts = newBlasts;
 
-      // Interaction Logic
-      if (prev.wizard?.x === newPlayerPos.x && prev.wizard?.y === newPlayerPos.y) {
-          setIsShopping(true);
-          soundService.playSelect();
-          shouldEnemiesMove = false;
-      } else if (prev.exit?.x === newPlayerPos.x && prev.exit?.y === newPlayerPos.y) {
-          shouldExit = true;
-          shouldEnemiesMove = false;
-      // --- TODO: Altar Interaction Logic ---
-      // const altarAtPos = prev.altars.find(a => a.x === newPlayerPos.x && a.y === newPlayerPos.y);
-      // if (altarAtPos) {
-      //   openAltarModal(altarAtPos); // A new modal state would be needed.
-      //   shouldEnemiesMove = false;
-      // }
-      // --- END TODO ---
-      } else {
-        const itemAtPos = prev.items.find(i => i.x === newPlayerPos.x && i.y === newPlayerPos.y);
-        if (itemAtPos) {
-            const itemKey = `${itemAtPos.x},${itemAtPos.y}`;
-            if (!newPickedUpItems.has(itemKey)) {
-                newPickedUpItems.add(itemKey);
-                switch (itemAtPos.type) {
-                    case ItemType.POTION:
-                        if (newPlayerState.hp < newPlayerState.maxHp) {
-                            newPlayerState.hp = Math.min(newPlayerState.maxHp, newPlayerState.hp + 20);
-                            setMessage("You drink a healing potion! +20 HP");
-                            soundService.playHeal();
-                        } else {
-                            newPlayerState.potions = Math.min(3, newPlayerState.potions + 1);
-                            setMessage("You stored a potion for later.");
-                            soundService.playArrowPickup();
-                        }
-                        break;
-                    case ItemType.GOLD: newPlayerState.gold += 5 + prev.level; setMessage(`You found ${5 + prev.level} gold!`); soundService.playGoldPickup(); break;
-                    case ItemType.ARROWS: newPlayerState.arrows = Math.min(newPlayerState.maxArrows, newPlayerState.arrows + 3); setMessage(`You found 3 arrows!`); soundService.playArrowPickup(); break;
-                    case ItemType.BOMB: newPlayerState.bombs = Math.min(newPlayerState.maxBombs, newPlayerState.bombs + 1); setMessage(`You found a bomb!`); soundService.playArrowPickup(); break;
-                    case ItemType.ANTIDOTE: newPlayerState.antidotes = Math.min(3, newPlayerState.antidotes + 1); setMessage(`You found an antidote!`); soundService.playArrowPickup(); break;
-                }
-            }
-        }
-
-        const hazardAtPos = prev.hazards.find(t => t.x === newPlayerPos.x && t.y === newPlayerPos.y);
-        if (hazardAtPos) {
-            let damage = 0, isInstantDeath = false;
-            switch(hazardAtPos.type) {
-                case HazardType.PIT: setMessage(`You fell into a pit!`); soundService.playFall(); isInstantDeath = true; break;
-                case HazardType.SPIKES: damage = 5 + prev.level; setMessage(`You stepped on spikes! -${damage} HP`); soundService.playTrap(); break;
-                case HazardType.FIRE: damage = 8 + prev.level; setMessage(`You stepped in fire! -${damage} HP`); soundService.playTrap(); break;
-            }
-            if(damage > 0) createDamageNumber(newPlayerState.x, newPlayerState.y, damage, 'player');
-            newPlayerState.hp -= damage;
-            triggerPlayerHitEffect();
-            if (isInstantDeath) newPlayerState.hp = 0;
-        } 
+      // Poison
+      if (newState.player.isPoisoned) {
+          const newCounter = newState.player.poisonStepCounter + 1;
+          if (newCounter >= POISON_TICK_STEPS) {
+              newState.player.hp -= POISON_DAMAGE;
+              createDamageNumber(newState.player.x, newState.player.y, POISON_DAMAGE, 'player');
+              triggerPoisonFlashEffect();
+              if (newState.player.hp <= 0) {
+                  setIsGameOver(true);
+                  setMessage("You succumbed to poison.");
+              }
+              newState.player.poisonStepCounter = 0;
+          } else {
+              newState.player.poisonStepCounter = newCounter;
+          }
       }
       
-      if (newPlayerState.hp <= 0 && prev.player.hp > 0) {
-          setIsGameOver(true);
-          soundService.playPlayerDeath();
-          shouldEnemiesMove = false;
-          newPlayerState.hp = 0;
-      }
-      
-      const finalState = { ...prev, player: newPlayerState, bombs: newBombs, enemies: newEnemies.map(e => ({...e, isHit: false})), pickedUpItems: newPickedUpItems, activeBlasts: newActiveBlasts };
-
-      setTimeout(() => {
-          if (shouldExit) handleNextLevel();
-          else if (shouldEnemiesMove) processEnemyTurn();
-          else animatingRef.current = false;
-      }, 150);
-
-      if (newActiveBlasts.length > 0) setTimeout(() => setGameState(p => ({...p, activeBlasts: []})), 200);
-      
-      return finalState;
-    });
+      return processEnemyTurn(newState);
   };
   
-  const handleMove = React.useCallback((direction: Direction) => {
-    if (isGameOver || isInspecting || animatingRef.current || arrowProjectile || isPaused || isLevelingUp || isShopping || isTransitioning) return;
-    setGameState(prev => ({...prev, player: {...prev.player, lastMoveDirection: direction}}));
+  const handleMove = (direction: Direction) => {
+    if (animatingRef.current || isPaused) return;
+
     let { x, y } = gameState.player;
-    let nextX = x, nextY = y;
+    if (direction === 'ArrowUp') y--;
+    else if (direction === 'ArrowDown') y++;
+    else if (direction === 'ArrowLeft') x--;
+    else if (direction === 'ArrowRight') x++;
 
-    if (direction === 'ArrowUp') nextY--; else if (direction === 'ArrowDown') nextY++; else if (direction === 'ArrowLeft') nextX--; else if (direction === 'ArrowRight') nextX++; else return;
-    if (gameState.map[nextY]?.[nextX] === 1) { setMessage("Ouch! A wall."); soundService.playBump(); return; }
+    if (gameState.map[y][x] === TileType.WALL) { soundService.play('wall_bump'); return; }
 
-    const currentScreen = gameState.camera;
-    const nextScreen = { x: Math.floor(nextX / VIEWPORT_WIDTH), y: Math.floor(nextY / VIEWPORT_HEIGHT) };
-    if (currentScreen.x !== nextScreen.x || currentScreen.y !== nextScreen.y) {
-        if (nextScreen.x >= 0 && nextScreen.x < WORLD_SCREENS_W && nextScreen.y >= 0 && nextScreen.y < WORLD_SCREENS_H) {
-            setIsTransitioning(true); soundService.playNextLevel();
-            setTimeout(() => {
-                setGameState(prev => ({...prev, player: {...prev.player, x: nextX, y: nextY}, camera: nextScreen}));
-                setIsTransitioning(false);
-            }, 300);
-        } else { setMessage("You can't go that way."); soundService.playBump(); }
-        return;
-    }
+    const enemyAtTarget = gameState.enemies.find(e => e.x === x && e.y === y);
+    if (enemyAtTarget) { // Attack
+      soundService.play('player_attack');
+      const damage = gameState.player.attack + gameState.player.meleeDamageBonus;
+      createDamageNumber(x, y, damage, 'enemy');
+      const newHp = enemyAtTarget.hp - damage;
+      if (newHp <= 0) {
+        handleEnemyDefeated(enemyAtTarget);
+        const newState = processTurn({x: gameState.player.x, y: gameState.player.y});
+        setGameState({...newState, enemies: newState.enemies.filter(e => e.id !== enemyAtTarget.id)});
+      } else {
+        const newEnemies = gameState.enemies.map(e => e.id === enemyAtTarget.id ? { ...e, hp: newHp, isHit: true } : e);
+        const newState = processTurn({x: gameState.player.x, y: gameState.player.y});
+        setGameState({...newState, enemies: newEnemies});
+        setTimeout(() => setGameState(p => ({...p, enemies: p.enemies.map(e => e.id === enemyAtTarget.id ? {...e, isHit: false} : e)})), 200);
+      }
+    } else { // Move
+      soundService.play('player_move');
+      
+      const newState = processTurn({x, y});
+      
+      newState.player.lastMoveDirection = direction;
+      
+      const itemAtTarget = newState.items.find(i => i.x === x && i.y === y);
+      if (itemAtTarget) {
+        const itemKey = `${itemAtTarget.x},${itemAtTarget.y}`;
+        if(!newState.pickedUpItems.has(itemKey)) {
+          soundService.play('pickup_item');
+          newState.pickedUpItems.add(itemKey);
+          switch(itemAtTarget.type) {
+            case ItemType.GOLD: newState.player.gold += 10; setMessage("Found 10 gold!"); break;
+            case ItemType.POTION: newState.player.potions = Math.min(3, newState.player.potions + 1); setMessage("Found a potion!"); break;
+            case ItemType.ARROWS: newState.player.arrows = Math.min(newState.player.maxArrows, newState.player.arrows + 3); setMessage("Found 3 arrows!"); break;
+            case ItemType.BOMB: newState.player.bombs = Math.min(newState.player.maxBombs, newState.player.bombs + 1); setMessage("Found a bomb!"); break;
+            case ItemType.ANTIDOTE: newState.player.antidotes = Math.min(3, newState.player.antidotes + 1); setMessage("Found an antidote!"); break;
+          }
+        }
+      }
+      
+      if (newState.wizard && newState.wizard.x === x && newState.wizard.y === y) {
+        setIsShopping(true);
+        setMessage("The wizard offers wares.");
+      }
+      
+      const altarAtTarget = newState.altars.find(a => a.x === x && a.y === y);
+      if (altarAtTarget) {
+          soundService.play('altar');
+          const effects = Object.values(ALTAR_EFFECTS);
+          const effect = effects[Math.floor(Math.random() * effects.length)];
+          
+          let newPlayer = {...newState.player};
+          let effectMsg = effect.description;
 
-    const enemyAtPos = gameState.enemies.find(enemy => enemy.x === nextX && enemy.y === nextY && enemy.hp > 0);
-    if (enemyAtPos) {
-        animatingRef.current = true;
-        let newPlayerState = { ...gameState.player };
-        let newEnemiesState = [...gameState.enemies];
-        let messages: string[] = [];
+          if(effect.type === 'stat') {
+              newPlayer[effect.stat] = Math.max(effect.stat === 'maxHp' ? 10 : 1, newPlayer[effect.stat] + effect.value);
+              if (effect.stat === 'maxHp') newPlayer.hp = newPlayer.maxHp;
+          } else if (effect.type === 'augment') {
+              if(!newPlayer.activeAugments.includes(effect.augmentId)) {
+                  newPlayer.activeAugments.push(effect.augmentId);
+                  const augment = AUGMENTS[effect.augmentId];
+                  effectMsg = `You have been granted the augment: ${augment.name}!`;
+                  if(augment.onAcquire) {
+                    Object.entries(augment.onAcquire).forEach(([stat, value]) => {
+                       newPlayer[stat] += value;
+                    });
+                  }
+              } else {
+                 effectMsg = "The altar's power feels familiar and fades...";
+              }
+          }
+          
+          const corruptionGained = effect.corruption || 10;
+          newPlayer.corruption = Math.min(100, newPlayer.corruption + corruptionGained);
+          
+          setMessage(effectMsg);
+          newState.player = newPlayer;
+      }
 
-        const playerDamage = newPlayerState.attack + newPlayerState.meleeDamageBonus + Math.floor(Math.random() * 5);
-        const enemyIndex = newEnemiesState.findIndex(e => e.id === enemyAtPos.id);
-        const newEnemyHp = newEnemiesState[enemyIndex].hp - playerDamage;
-        messages.push(`You hit the ${enemyAtPos.type} for ${playerDamage} damage!`);
-        createDamageNumber(enemyAtPos.x, enemyAtPos.y, playerDamage, 'enemy');
-        soundService.playCrunch();
-        newEnemiesState[enemyIndex] = {...newEnemiesState[enemyIndex], hp: newEnemyHp, isHit: true};
-
-        if (newEnemyHp > 0) {
-            const enemyDamage = enemyAtPos.attack + Math.floor(Math.random() * 3);
-            newPlayerState.hp -= enemyDamage;
-            messages.push(`The ${enemyAtPos.type} hits back for ${enemyDamage} damage!`);
-            createDamageNumber(newPlayerState.x, newPlayerState.y, enemyDamage, 'player');
-            triggerPlayerHitEffect();
-        } else { handleEnemyDefeated(enemyAtPos); }
-        setMessage(messages.join(' '));
-        if (newPlayerState.hp <= 0) { setIsGameOver(true); soundService.playPlayerDeath(); newPlayerState.hp = 0; }
-        
-        setGameState(prev => ({...prev, player: newPlayerState, enemies: newEnemiesState}));
-        setTimeout(() => {
-          setGameState(prev => ({...prev, enemies: prev.enemies.map(e => ({...e, isHit: false}))}));
-          if (newPlayerState.hp > 0) processEnemyTurn(); else animatingRef.current = false;
-        }, 150);
-    } else { processTurn({x: nextX, y: nextY}); }
-  }, [gameState, isGameOver, isInspecting, arrowProjectile, isPaused, isLevelingUp, isShopping, isTransitioning, triggerPlayerHitEffect]);
-
-  const handleFireArrow = React.useCallback(() => {
-    const { player } = gameState;
-    if (isGameOver || isInspecting || animatingRef.current || arrowProjectile || player.arrows <= 0 || !player.lastMoveDirection || isPaused || isLevelingUp || isShopping || isTransitioning) return;
-    setGameState(prev => ({...prev, player: {...prev.player, arrows: prev.player.arrows - 1}}));
-    soundService.playArrowFire();
-    const direction = player.lastMoveDirection;
-    let arrowPos = { x: player.x, y: player.y };
-
-    const moveArrow = () => {
-      if (direction === 'ArrowUp') arrowPos.y--; else if (direction === 'ArrowDown') arrowPos.y++; else if (direction === 'ArrowLeft') arrowPos.x--; else arrowPos.x++;
-      setArrowProjectile({ ...arrowPos, visible: true, direction });
-      const { map, enemies } = gameState;
-      if (map[arrowPos.y]?.[arrowPos.x] === 1) { setArrowProjectile(null); return; }
-      const enemyHitIndex = enemies.findIndex(e => e.x === arrowPos.x && e.y === arrowPos.y && e.hp > 0);
-      if (enemyHitIndex !== -1) {
-        const arrowDamage = Math.floor((gameState.player.attack + gameState.player.arrowDamageBonus) * 0.8) + Math.floor(Math.random() * 4);
-        setGameState(prev => {
-          const newEnemies = [...prev.enemies];
-          const updatedEnemy = {...newEnemies[enemyHitIndex]};
-          updatedEnemy.hp -= arrowDamage;
-          updatedEnemy.isHit = true;
-          newEnemies[enemyHitIndex] = updatedEnemy;
-          createDamageNumber(updatedEnemy.x, updatedEnemy.y, arrowDamage, 'enemy');
-          setMessage(`Arrow hit ${updatedEnemy.type} for ${arrowDamage} damage!`);
-          soundService.playArrowHit();
-          if (updatedEnemy.hp <= 0) handleEnemyDefeated(updatedEnemy);
-          setTimeout(() => setGameState(p => ({...p, enemies: p.enemies.map(e => ({...e, isHit: false}))})), 200);
-          return {...prev, enemies: newEnemies};
-        });
-        // TODO: Augment Effect Application
-        // Example: If the player has 'PIERCING_ARROWS', don't stop the arrow here.
-        // if (!gameState.player.activeAugments.includes('PIERCING_ARROWS')) {
-        //   setArrowProjectile(null);
-        //   return;
-        // }
-        setArrowProjectile(null);
+      if (newState.exit && newState.exit.x === x && newState.exit.y === y) {
+        handleNextLevel();
         return;
       }
-      setTimeout(moveArrow, 60);
-    };
-    moveArrow();
-  }, [gameState, isGameOver, isInspecting, arrowProjectile, isPaused, isLevelingUp, isShopping, isTransitioning]);
-  
-  const handleDropBomb = React.useCallback(() => {
-    const { player, bombs } = gameState;
-    if (isGameOver || isInspecting || animatingRef.current || isPaused || player.bombs <= 0 || isLevelingUp || isShopping || isTransitioning) return;
-    if (bombs.some(b => b.x === player.x && b.y === player.y)) return;
-    setGameState(prev => ({ ...prev, player: { ...prev.player, bombs: prev.player.bombs - 1}, bombs: [...prev.bombs, { x: player.x, y: player.y, stepsRemaining: BOMB_FUSE_STEPS, id: Date.now() }] }));
-    soundService.playBombDrop();
-  }, [gameState, isGameOver, isInspecting, isPaused, isLevelingUp, isShopping, isTransitioning]);
-
-  const handleUsePotion = React.useCallback(() => {
-    if (gameState.player.potions <= 0 || gameState.player.hp === gameState.player.maxHp) return;
-    setGameState(prev => ({...prev, player: {...prev.player, potions: prev.player.potions - 1, hp: Math.min(prev.player.maxHp, prev.player.hp + 50)}}));
-    setMessage("You drink a potion and feel refreshed. +50 HP");
-    soundService.playHeal();
-  }, [gameState.player.potions, gameState.player.hp, gameState.player.maxHp]);
-
-  const handleUseAntidote = React.useCallback(() => {
-    if (gameState.player.antidotes <= 0 || !gameState.player.isPoisoned) return;
-    setGameState(prev => ({...prev, player: {...prev.player, antidotes: prev.player.antidotes - 1, isPoisoned: false}}));
-    setMessage("You drink the antidote. The poison subsides.");
-    soundService.playCure();
-  }, [gameState.player.antidotes, gameState.player.isPoisoned]);
-
-  const handleKeyDown = React.useCallback((e: KeyboardEvent) => {
-    if (gameScreen !== 'game' || isGameOver) return;
-    if (e.key === 'Escape') {
-      if (isInspecting) { setInspectedEnemy(null); setIsInspecting(false); } 
-      else if (isShopping) setIsShopping(false);
-      else if (!isLevelingUp) setIsPaused(prev => !prev);
-      return;
+      
+      const { VIEWPORT_WIDTH, VIEWPORT_HEIGHT } = SYSTEMS;
+      newState.camera.x = Math.floor(x / VIEWPORT_WIDTH);
+      newState.camera.y = Math.floor(y / VIEWPORT_HEIGHT);
+      
+      setGameState(newState);
+      setTimeout(() => setGameState(p => ({...p, activeBlasts: []})), 100);
     }
-    if (isPaused || isLevelingUp || isShopping || isTransitioning) return;
-    if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) handleMove(e.key as Direction);
-    else if (e.key === 'f' || e.key === ' ') { e.preventDefault(); handleFireArrow(); } 
-    else if (e.key === 'b') { e.preventDefault(); handleDropBomb(); }
-    else if (e.key === 'h') { e.preventDefault(); handleUsePotion(); }
-    else if (e.key === 'u') { e.preventDefault(); handleUseAntidote(); }
-  }, [handleMove, handleFireArrow, handleDropBomb, handleUsePotion, handleUseAntidote, isPaused, isGameOver, isLevelingUp, isShopping, isInspecting, gameScreen, isTransitioning]);
-
-  React.useEffect(() => {
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [handleKeyDown]);
+  };
   
-  const anyModalOpen = isGameOver || !!inspectedEnemy || isPaused || isLevelingUp || isShopping;
+  React.useEffect(() => {
+    if (!arrowProjectile || !arrowProjectile.visible) return;
 
-  const renderGame = () => (
-    <div className={`w-full h-full ${isPlayerHit ? 'screen-shake' : ''} ${isPlayerPoisonedFlashing ? 'green-flash' : ''} flex flex-col`}>
-      <header className="w-full max-w-lg mx-auto flex-shrink-0">
-        <TopHud player={gameState.player} onPause={() => setIsPaused(true)} />
-      </header>
-      
-      <main className="flex-grow flex flex-col items-center justify-center">
-          <div className="relative p-1 bg-black mx-auto" style={{border: '2px solid var(--color-accent2)', boxShadow: `0 0 10px var(--color-accent2)`, width: 'fit-content'}}>
-            <GameGrid 
-              map={gameState.map} player={gameState.player} enemies={gameState.enemies}
-              items={gameState.items.filter(i => !gameState.pickedUpItems.has(`${i.x},${i.y}`))}
-              exit={gameState.exit} wizard={gameState.wizard} hazards={gameState.hazards}
-              doodads={gameState.doodads} bombs={gameState.bombs} activeBlasts={gameState.activeBlasts}
-              arrowProjectile={arrowProjectile} onEnemyClick={handleInspectEnemy} camera={gameState.camera}
-              isTransitioning={isTransitioning} isPlayerHit={isPlayerHit} isPlayerPoisonedFlashing={isPlayerPoisonedFlashing}
-              damageNumbers={damageNumbers}
-              // TODO: Pass altars to the GameGrid
-              altars={gameState.altars}
-            />
-            <GameUI message={message} />
-            {anyModalOpen && <div className="absolute inset-0 bg-black bg-opacity-70 z-10" />}
-          </div>
-      </main>
-      
-      {!anyModalOpen && (
-        <footer className="w-full flex-shrink-0 md:hidden p-2 flex justify-between items-end">
-          <Dpad onMove={handleMove} />
-          <ActionPanel onFireArrow={handleFireArrow} onDropBomb={handleDropBomb} onUsePotion={handleUsePotion} onUseAntidote={handleUseAntidote} player={gameState.player} />
-        </footer>
-      )}
+    let { x, y, direction } = arrowProjectile;
+    const interval = setInterval(() => {
+        if (direction === 'ArrowUp') y--;
+        else if (direction === 'ArrowDown') y++;
+        else if (direction === 'ArrowLeft') x--;
+        else if (direction === 'ArrowRight') x++;
 
-      {isGameOver && (
-        <Modal title="YOU DIED" onClose={restartGame} buttonText="Try Again?">
-          <p className="text-center text-lg">You reached player level {gameState.player.level} on dungeon level {gameState.level} with {gameState.player.gold} gold.</p>
-           <p className="text-center text-sm mt-4">Your strength and resilience grow, but your wallet feels lighter...</p>
-        </Modal>
-      )}
-      {isPaused && (
-        <Modal title="PAUSED" onClose={() => setIsPaused(false)} buttonText="Resume">
-          <div className="flex flex-col items-center space-y-6">
-            <VolumeControls musicVolume={musicVolume} sfxVolume={sfxVolume} onMusicVolumeChange={setMusicVolume} onSfxVolumeChange={handleSfxVolumeChange} />
-            <div className="w-full flex justify-around items-center pt-4">
-              <button onClick={restartGame} className="bg-orange-600 text-white px-6 py-2 font-bold hover:bg-orange-500 active:scale-95 transform transition-all">Restart</button>
-              <button onClick={quitGame} className="bg-red-600 text-white px-6 py-2 font-bold hover:bg-red-500 active:scale-95 transform transition-all">Quit</button>
-            </div>
-          </div>
-        </Modal>
-      )}
-      {isLevelingUp && (<LevelUpModal onChoice={handleLevelUpChoice} />)}
-      {/* FIX: Changed handleBuy to handleBuyItem */}
-      {isShopping && gameState.wizard && (<ShopModal playerGold={gameState.player.gold} onBuy={handleBuyItem} onClose={() => setIsShopping(false)} />)}
-      {/* TODO: Create an AltarModal component to display when the player interacts with an Altar */}
-      {inspectedEnemy && (
-        <Modal title={`Inspecting ${inspectedEnemy.enemy.type}`} onClose={() => { setInspectedEnemy(null); setIsInspecting(false); }} buttonText="Close">
-          <div className="text-center">
-            <p className="text-lg" style={{color: 'var(--color-accent1)'}}>HP: {inspectedEnemy.enemy.hp}, ATK: {inspectedEnemy.enemy.attack}</p>
-            <p className="mt-4 text-base min-h-[6em] flex items-center justify-center" style={{color: 'var(--color-text)'}}>"{inspectedEnemy.description}"</p>
-          </div>
-        </Modal>
-      )}
-    </div>
-  );
+        if (gameState.map[y]?.[x] !== TileType.FLOOR) {
+            setArrowProjectile(null);
+            animatingRef.current = false;
+            const newState = processTurn({x: gameState.player.x, y: gameState.player.y});
+            setGameState(newState);
+            return;
+        }
+
+        const enemyHit = gameState.enemies.find(e => e.x === x && e.y === y);
+        if (enemyHit) {
+            soundService.play('arrow_hit');
+            const damage = 10 + gameState.player.arrowDamageBonus;
+            createDamageNumber(x, y, damage, 'enemy');
+            const newHp = enemyHit.hp - damage;
+            if (newHp <= 0) handleEnemyDefeated(enemyHit);
+
+            setGameState(prev => ({
+                ...prev,
+                enemies: newHp <= 0 ? prev.enemies.filter(e => e.id !== enemyHit.id) : prev.enemies.map(e => e.id === enemyHit.id ? { ...e, hp: newHp } : e)
+            }));
+            setArrowProjectile(null);
+            animatingRef.current = false;
+            const newState = processTurn({x: gameState.player.x, y: gameState.player.y});
+            setGameState(newState);
+            return;
+        }
+
+        setArrowProjectile(p => p ? { ...p, x, y } : null);
+
+    }, 50);
+
+    return () => {
+        clearInterval(interval);
+        animatingRef.current = false;
+    };
+}, [arrowProjectile, gameState.map]);
+
+
+  if (gameScreen === 'title') return <TitleScreen onStart={startGame} onSettings={() => setIsSettingsOpen(true)} />;
+  if (gameScreen === 'class_selection') return <ClassSelectionModal onSelect={handleClassSelect} />;
   
   return (
     <div className="flex flex-col h-screen p-2 sm:p-4 select-none" style={{backgroundColor: 'var(--color-bg)'}}>
-      {gameScreen === 'title' && <TitleScreen onStart={startGame} onSettings={() => setIsSettingsOpen(true)} />}
-      {gameScreen === 'class_selection' && <ClassSelectionModal onSelect={handleClassSelect} />}
-      {gameScreen === 'game' && renderGame()}
-      {isSettingsOpen && (
-         <SettingsModal onClose={() => setIsSettingsOpen(false)}>
-            <VolumeControls musicVolume={musicVolume} sfxVolume={sfxVolume} onMusicVolumeChange={setMusicVolume} onSfxVolumeChange={handleSfxVolumeChange} />
-         </SettingsModal>
-      )}
+      <div className={`flex-grow flex flex-col items-center justify-center relative transition-opacity duration-300 ${isTransitioning ? 'opacity-0' : 'opacity-100'}`}>
+        <TopHud player={gameState.player} level={gameState.level} />
+        <GameGrid 
+          gameState={gameState} 
+          isPlayerHit={isPlayerHit} 
+          isPlayerPoisonedFlashing={isPlayerPoisonedFlashing}
+          arrowProjectile={arrowProjectile}
+          damageNumbers={damageNumbers}
+        />
+        <GameUI 
+          message={message} 
+          isInspecting={isInspecting} 
+          inspectedEnemy={inspectedEnemy}
+          onCloseInspect={() => setIsInspecting(false)}
+        />
+        <CorruptionMeter corruption={gameState.player.corruption} />
+        <VolumeControls onMusicChange={setMusicVolume} onSfxChange={handleSfxVolumeChange} initialMusic={musicVolume} initialSfx={sfxVolume} />
+      </div>
+
+      <div className="flex-shrink-0 lg:hidden mt-2">
+         <Dpad onMove={handleMove} />
+         <ActionPanel onUsePotion={usePotion} onPlaceBomb={placeBomb} onFireArrow={fireArrow} />
+      </div>
+
+      {isGameOver && <Modal title="Game Over" onClose={restartGame}><p className="text-center">{message}</p><button className="mt-4 bg-purple-600 hover:bg-purple-500 text-white font-bold py-2 px-4 rounded" onClick={restartGame}>Restart</button></Modal>}
+      {isPaused && <Modal title="Paused" onClose={() => setIsPaused(false)}><div className="flex flex-col space-y-2"><button className="bg-purple-600 hover:bg-purple-500 text-white font-bold py-2 px-4 rounded" onClick={() => setIsPaused(false)}>Resume</button><button className="bg-gray-600 hover:bg-gray-500 text-white font-bold py-2 px-4 rounded" onClick={quitGame}>Quit to Title</button></div></Modal>}
+      {isLevelingUp && <LevelUpModal onChoice={handleLevelUpChoice} />}
+      {isShopping && <ShopModal onBuy={handleBuyItem} onClose={() => setIsShopping(false)} gold={gameState.player.gold} />}
+      {isSettingsOpen && <SettingsModal onClose={() => setIsSettingsOpen(false)} />}
     </div>
   );
 };
-
 export default App;
