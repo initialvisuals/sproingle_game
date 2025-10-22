@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Sproingle: A Crunchy Rogue-lite</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
+    <style>
+      :root {
+        --color-bg: #1a1a1a;
+        --color-text: #f0f0f0;
+        --color-wall: #3a3a3a;
+        --color-floor: #2a2a2a;
+        --color-accent1: #a855f7; /* purple-500 */
+        --color-accent2: #bef264; /* lime-400 */
+        --color-doodad: #78716c; /* stone-500 */
+      }
+      body {
+        font-family: 'Press Start 2P', cursive;
+        background-color: var(--color-bg);
+        color: var(--color-text);
+        overflow: hidden;
+      }
+      .sproing-text {
+        animation: sproing-text-animation 0.3s ease-out;
+      }
+      @keyframes sproing-text-animation {
+        0% { transform: scale(1); }
+        50% { transform: scale(1.5); }
+        100% { transform: scale(1); }
+      }
+      .shake {
+        animation: shake-animation 0.2s ease-in-out;
+      }
+      @keyframes shake-animation {
+        0%, 100% { transform: translateX(0); }
+        25% { transform: translateX(-4px) rotate(-1deg); }
+        75% { transform: translateX(4px) rotate(1deg); }
+      }
+      @keyframes damage-number-animation {
+        0% { transform: translateY(0); opacity: 1; }
+        100% { transform: translateY(-30px); opacity: 0; }
+      }
+      .screen-shake {
+        animation: screen-shake-animation 0.3s ease-in-out;
+      }
+      @keyframes screen-shake-animation {
+        0%, 100% { transform: translate(0, 0); }
+        10%, 30%, 50%, 70%, 90% { transform: translate(-3px, 2px); }
+        20%, 40%, 60%, 80% { transform: translate(3px, -2px); }
+      }
+      .red-flash {
+        animation: red-flash-animation 0.3s ease-out;
+        pointer-events: none;
+      }
+      @keyframes red-flash-animation {
+        0% { background-color: rgba(255, 0, 0, 0.4); }
+        100% { background-color: rgba(255, 0, 0, 0); }
+      }
+      .green-flash {
+        animation: green-flash-animation 0.3s ease-out;
+        pointer-events: none;
+      }
+      @keyframes green-flash-animation {
+        0% { background-color: rgba(0, 255, 0, 0.3); }
+        100% { background-color: rgba(0, 255, 0, 0); }
+      }
+      @keyframes poison-flash {
+        0%, 100% { filter: brightness(1) drop-shadow(0 0 0 transparent); }
+        50% { filter: brightness(1.5) drop-shadow(0 0 5px #0f0); }
+      }
+      .poison-flash {
+        animation: poison-flash 0.3s ease-in-out;
+      }
+      @keyframes bomb-warning-animation {
+        0% { color: yellow; text-shadow: 0 0 8px yellow; }
+        50% { color: red; text-shadow: 0 0 8px red; }
+        100% { color: yellow; text-shadow: 0 0 8px yellow; }
+      }
+      .bomb-warning {
+        animation: bomb-warning-animation 0.5s infinite;
+      }
+      @keyframes damage-flash {
+        0%, 100% { filter: none; }
+        50% { filter: brightness(1.75) sepia(1) hue-rotate(330deg) saturate(5); }
+      }
+      .damage-flash {
+        animation: damage-flash 0.2s ease-in-out;
+      }
+      /* Custom pixelated range slider */
+      input[type=range] {
+        -webkit-appearance: none;
+        appearance: none;
+        width: 100%;
+        height: 8px;
+        background: #333;
+        outline: none;
+        border: 2px solid var(--color-text);
+      }
+      input[type=range]::-webkit-slider-thumb {
+        -webkit-appearance: none;
+        appearance: none;
+        width: 16px;
+        height: 24px;
+        background: var(--color-text);
+        cursor: pointer;
+        border: 2px solid #333;
+      }
+      input[type=range]::-moz-range-thumb {
+        width: 12px;
+        height: 20px;
+        background: var(--color-text);
+        cursor: pointer;
+        border: 2px solid #333;
+      }
+    </style>
+  <script type="importmap">
+{
+  "imports": {
+    "react": "https://aistudiocdn.com/react@^19.2.0",
+    "react-dom/": "https://aistudiocdn.com/react-dom@^19.2.0/",
+    "react/": "https://aistudiocdn.com/react@^19.2.0/",
+    "@google/genai": "https://aistudiocdn.com/@google/genai@^1.25.0"
+  }
+}
+</script>
+<link rel="stylesheet" href="/index.css">
+</head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/index.tsx"></script>
+  </body>
+</html>
