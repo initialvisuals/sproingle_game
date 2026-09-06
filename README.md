@@ -41,3 +41,7 @@ npm run preview  # preview the build
 ### License
 
 Initial Visuals experiment — check the repo for license details as they evolve.
+
+---
+
+**Initial Visuals** — tools, sims, games, and experiments.
